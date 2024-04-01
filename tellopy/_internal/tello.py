@@ -60,7 +60,7 @@ class Tello(object):
     LOG_DEBUG = logger.LOG_DEBUG
     LOG_ALL = logger.LOG_ALL
 
-    def __init__(self, port=9000):
+    def __init__(self, ifname, port=9000):
         self.tello_addr = ('192.168.10.1', 8889)
         self.debug = False
         self.pkt_seq_num = 0x01e4
@@ -86,18 +86,23 @@ class Tello(object):
         self.log_data = LogData(log)
         self.log_data_file = None
         self.log_data_header_recorded = False
+        
+        # interface name
+        self.ifname = ifname;
+        print("interface neame: {}".format(self.ifname));
 
         # video zoom state
         self.zoom = False
 
-        # fast mode state
-        self.fast_mode = False   
-        
         # File recieve state.
         self.file_recv = {}  # Map filenum -> protocol.DownloadedFile
 
         # Create a UDP socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # set socket options
+        # socket binded to device
+        self.sock.setsockopt(socket.SOL_SOCKET, 25, self.ifname.encode());
+
         self.sock.bind(('', self.port))
         self.sock.settimeout(2.0)
 
@@ -478,20 +483,6 @@ class Tello(object):
             log.info('set_roll(val=%4.2f)' % roll)
         self.right_x = self.__fix_range(roll)
 
-    def toggle_fast_mode(self):
-        if self.fast_mode:
-            self.fast_mode = False
-        elif not self.fast_mode:
-            self.fast_mode = True
-            
-    def manual_takeoff(self):
-        # Hold max 'yaw' and min 'pitch', 'roll', 'throttle' for several seconds
-        self.set_pitch(-1)
-        self.set_roll(-1)
-        self.set_yaw(1)
-        self.set_throttle(-1)
-        self.fast_mode = False            
-
     def __send_stick_command(self):
         pkt = Packet(STICK_CMD, 0x60)
 
@@ -499,10 +490,8 @@ class Tello(object):
         axis2 = int(1024 + 660.0 * self.right_y) & 0x7ff
         axis3 = int(1024 + 660.0 * self.left_y) & 0x7ff
         axis4 = int(1024 + 660.0 * self.left_x) & 0x7ff
-        axis5 = int(self.fast_mode) & 0x01        
         '''
         11 bits (-1024 ~ +1023) x 4 axis = 44 bits
-        fast_mode takes 1 bit        
         44 bits will be packed in to 6 bytes (48 bits)
 
                     axis4      axis3      axis2      axis1
@@ -512,19 +501,16 @@ class Tello(object):
          |       |       |       |       |       |       |
              byte5   byte4   byte3   byte2   byte1   byte0
         '''
-        log.debug("stick command: fast=%d yaw=%4d thr=%4d pit=%4d rol=%4d" %
-                  (axis5, axis4, axis3, axis2, axis1))
-        log.debug("stick command: fast=%04x yaw=%04x thr=%04x pit=%04x rol=%04x" %
-                  (axis5, axis4, axis3, axis2, axis1))
-        packed = axis1 | (axis2 << 11) | (
-            axis3 << 22) | (axis4 << 33) | (axis5 << 44)
-        packed_bytes = struct.pack('<Q', packed)
-        pkt.add_byte(byte(packed_bytes[0]))
-        pkt.add_byte(byte(packed_bytes[1]))
-        pkt.add_byte(byte(packed_bytes[2]))
-        pkt.add_byte(byte(packed_bytes[3]))
-        pkt.add_byte(byte(packed_bytes[4]))
-        pkt.add_byte(byte(packed_bytes[5]))
+        log.debug("stick command: yaw=%4d thr=%4d pit=%4d rol=%4d" %
+                  (axis4, axis3, axis2, axis1))
+        log.debug("stick command: yaw=%04x thr=%04x pit=%04x rol=%04x" %
+                  (axis4, axis3, axis2, axis1))
+        pkt.add_byte(((axis2 << 11 | axis1) >> 0) & 0xff)
+        pkt.add_byte(((axis2 << 11 | axis1) >> 8) & 0xff)
+        pkt.add_byte(((axis3 << 11 | axis2) >> 5) & 0xff)
+        pkt.add_byte(((axis4 << 11 | axis3) >> 2) & 0xff)
+        pkt.add_byte(((axis4 << 11 | axis3) >> 10) & 0xff)
+        pkt.add_byte(((axis4 << 11 | axis3) >> 18) & 0xff)
         pkt.add_time()
         pkt.fixup()
         log.debug("stick command: %s" % byte_to_hexstring(pkt.get_buffer()))
@@ -773,8 +759,10 @@ class Tello(object):
         # Create a UDP socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         port = 6038
+        sock.setsockopt(socket.SOL_SOCKET, 25, self.ifname.encode());
         sock.bind(('', port))
         sock.settimeout(1.0)
+        # see if here need to modify
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
         log.info('video receive buffer size = %d' %
                  sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))
